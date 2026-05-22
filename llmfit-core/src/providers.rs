@@ -457,11 +457,19 @@ fn check_mlx_python() -> bool {
 fn is_likely_mlx_repo(owner: &str, repo: &str) -> bool {
     let owner_lower = owner.to_lowercase();
     let repo_lower = repo.to_lowercase();
+    // Exclude GGUF repos — they belong to llama.cpp, not MLX
+    if is_likely_gguf_repo(&repo_lower) {
+        return false;
+    }
     owner_lower == "mlx-community"
         || repo_lower.contains("-mlx-")
         || repo_lower.ends_with("-mlx")
         || repo_lower.contains("mlx-")
         || repo_lower.ends_with("mlx")
+}
+
+fn is_likely_gguf_repo(repo_lower: &str) -> bool {
+    repo_lower.contains("-gguf") || repo_lower.ends_with("gguf")
 }
 
 /// Scan ~/.cache/huggingface/hub/ for MLX model directories.
@@ -495,6 +503,41 @@ fn scan_hf_cache_for_mlx() -> HashSet<String> {
         set.insert(repo_lower);
     }
     set
+}
+
+/// Scan ~/.cache/huggingface/hub/ for GGUF model directories.
+fn scan_hf_cache_for_gguf() -> (HashSet<String>, usize) {
+    let mut set = HashSet::new();
+    let mut count = 0usize;
+    let cache_dir = dirs_hf_cache();
+    let Ok(entries) = std::fs::read_dir(&cache_dir) else {
+        return (set, count);
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        let Some(rest) = name_str.strip_prefix("models--") else {
+            continue;
+        };
+        let mut parts = rest.splitn(2, "--");
+        let Some(owner) = parts.next() else {
+            continue;
+        };
+        let Some(repo) = parts.next() else {
+            continue;
+        };
+
+        if !is_likely_gguf_repo(&repo.to_lowercase()) {
+            continue;
+        }
+
+        count += 1;
+        let owner_lower = owner.to_lowercase();
+        let repo_lower = repo.to_lowercase();
+        set.insert(format!("{}/{}", owner_lower, repo_lower));
+        set.insert(repo_lower);
+    }
+    (set, count)
 }
 
 fn dirs_hf_cache() -> std::path::PathBuf {
@@ -676,6 +719,10 @@ impl LlamaCppProvider {
                 }
             }
         }
+        // Also scan the HuggingFace cache for GGUF repos downloaded via `hf download`
+        let (hf_set, hf_count) = scan_hf_cache_for_gguf();
+        count += hf_count;
+        set.extend(hf_set);
         (set, count)
     }
 
