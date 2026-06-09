@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.9.31](https://github.com/AlexsJones/llmfit/compare/v0.9.30...v0.9.31) (2026-06-09)
+
+
+### Features
+
+* **lmstudio:** Add LMSTUDIO_API_KEY support for authenticated instances ([0dc2712](https://github.com/AlexsJones/llmfit/commit/0dc2712df4b4d947e0db371c98bf376d4da16c85))
+* **lmstudio:** Add LMSTUDIO_API_KEY support for authenticated instances ([302cb53](https://github.com/AlexsJones/llmfit/commit/302cb535830e7e001c0735596d0c06da96fdc467))
+* speed up provider navigation when holding shift (gh-571) ([f0d4783](https://github.com/AlexsJones/llmfit/commit/f0d4783dd99f4c12a0fe15d564d8bc787ef7c755))
+* speed up provider navigation when holding shift (gh-571) ([7d74d7d](https://github.com/AlexsJones/llmfit/commit/7d74d7d4a93cb8c229868b00d8bc3385005e3551))
+* upgrade MiniMax default model to M3 ([d45a546](https://github.com/AlexsJones/llmfit/commit/d45a546ebd9eca78cb5e09f191321e67807112d2))
+* upgrade MiniMax default model to M3 ([7407d10](https://github.com/AlexsJones/llmfit/commit/7407d1035ef7dd7b14ed50a1dc1f3f6e21a08a44))
+
+
+### Bug Fixes
+
+* add Gemma 4 QAT models and fallback HF search ([e40d3b8](https://github.com/AlexsJones/llmfit/commit/e40d3b8e00b1db1fae9234e34fadde8a8a3945a2))
+* add Gemma 4 QAT models and fallback HF search ([9b4582f](https://github.com/AlexsJones/llmfit/commit/9b4582f0e45c02ffb09abaef649cc45e01344f63)), closes [#613](https://github.com/AlexsJones/llmfit/issues/613)
+* **lmstudio:** empty string guard, README docs, and unit test for LMSTUDIO_API_KEY ([46f70b7](https://github.com/AlexsJones/llmfit/commit/46f70b790e3bd177e001469d04456ce1e20193c5))
+* replace unsafe env mutation in tests with pure logic tests ([33047d8](https://github.com/AlexsJones/llmfit/commit/33047d85fab2913d09905922df9a3daef6b5a314))
+* **tui:** handle search input cursor and overflow ([66f4c88](https://github.com/AlexsJones/llmfit/commit/66f4c887b37c617944a8bc14a1d0a20aedac9767))
+* **tui:** handle search input cursor and overflow ([8596005](https://github.com/AlexsJones/llmfit/commit/85960054bbb88c961ffa4797006dd3475a8b4699))
+* **tui:** handle unicode download directory input ([b34d164](https://github.com/AlexsJones/llmfit/commit/b34d164cb9f5baf60f3b14058599d0d13755e212))
+* **tui:** handle unicode download directory input ([da120f8](https://github.com/AlexsJones/llmfit/commit/da120f8d6993dd2e6cfed899478b6796b1992221))
+* **tui:** ignore modified key input in search ([6c0b697](https://github.com/AlexsJones/llmfit/commit/6c0b69701e8ec9be28a7a98bd0e94812f64a037c))
+* **tui:** ignore modified key input in search ([8de0a1b](https://github.com/AlexsJones/llmfit/commit/8de0a1b5a0627327f82360f9c9ced2ca71cfc4a7))
+* use GGUF metadata for param counts in GGUF-only repos ([3f9b22b](https://github.com/AlexsJones/llmfit/commit/3f9b22bb032a3b4444750ddfca12acfdf96e27df))
+* use GGUF metadata for parameter counts in GGUF-only repos ([ff28cdd](https://github.com/AlexsJones/llmfit/commit/ff28cdd002f4777ab1857b0c6e669c3c7789a1cd)), closes [#622](https://github.com/AlexsJones/llmfit/issues/622)
+* wrap env::set_var/remove_var in unsafe blocks for Rust 2024 edition ([55b7979](https://github.com/AlexsJones/llmfit/commit/55b79793d1aa8bd3ca6e6ab7d4f11c5f20f897f6))
+
 ## [0.9.30](https://github.com/AlexsJones/llmfit/compare/v0.9.29...v0.9.30) (2026-06-01)
 
 
