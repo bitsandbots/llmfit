@@ -1713,6 +1713,9 @@ impl App {
     pub fn search_input(&mut self, c: char) {
         self.search_query.insert(self.cursor_position, c);
         self.cursor_position += c.len_utf8();
+        // Changing the query should snap the list back to the top so all
+        // matches are visible regardless of the prior cursor position.
+        self.selected_row = 0;
         self.apply_filters();
     }
 
@@ -1721,6 +1724,7 @@ impl App {
             let prev = previous_grapheme_boundary(&self.search_query, self.cursor_position);
             self.search_query.drain(prev..self.cursor_position);
             self.cursor_position = prev;
+            self.selected_row = 0;
             self.apply_filters();
         }
     }
@@ -1729,6 +1733,7 @@ impl App {
         if self.cursor_position < self.search_query.len() {
             let next = next_grapheme_boundary(&self.search_query, self.cursor_position);
             self.search_query.drain(self.cursor_position..next);
+            self.selected_row = 0;
             self.apply_filters();
         }
     }
@@ -1749,6 +1754,7 @@ impl App {
     pub fn clear_search(&mut self) {
         self.search_query.clear();
         self.cursor_position = 0;
+        self.selected_row = 0;
         self.apply_filters();
     }
 
@@ -4573,5 +4579,76 @@ mod tests {
         app.dm_dir_backspace();
         assert_eq!(app.dm_dir_input, "一a");
         assert_eq!(app.dm_dir_cursor, 0);
+    }
+
+    // Reset every filter that `with_specs_and_context` may restore from a
+    // persisted filters.json so search tests are deterministic regardless of
+    // the developer's saved llmfit state.
+    fn clear_persisted_filters(app: &mut App) {
+        app.search_query.clear();
+        app.cursor_position = 0;
+        app.fit_filter = FitFilter::All;
+        app.availability_filter = AvailabilityFilter::All;
+        app.tp_filter = TpFilter::All;
+        app.filter_params_min_input.clear();
+        app.filter_params_max_input.clear();
+        app.filter_mem_pct_min_input.clear();
+        app.filter_mem_pct_max_input.clear();
+    }
+
+    #[test]
+    fn changing_search_query_resets_selection_to_top() {
+        let mut app = test_app();
+        clear_persisted_filters(&mut app);
+        app.all_fits = vec![
+            test_fit("gemma-2b", FitLevel::Good, 90.0),
+            test_fit("gemma-7b", FitLevel::Good, 80.0),
+            test_fit("llama-7b", FitLevel::Good, 70.0),
+        ];
+        app.providers = vec!["Test".to_string()];
+        app.selected_providers = vec![true];
+        app.apply_filters();
+        assert_eq!(app.filtered_fits.len(), 3);
+
+        // Cursor parked deep in the full list, mimicking the user having
+        // navigated far down before searching.
+        app.selected_row = app.filtered_fits.len() - 1;
+
+        // Typing a query must snap the viewport back to the top so every
+        // match is visible (issue #657).
+        app.search_input('g');
+        assert!(!app.filtered_fits.is_empty());
+        assert_eq!(app.selected_row, 0);
+
+        // Clearing the search also resets to the top.
+        app.selected_row = app.filtered_fits.len() - 1;
+        app.clear_search();
+        assert_eq!(app.filtered_fits.len(), 3);
+        assert_eq!(app.selected_row, 0);
+
+        // Backspacing the query resets to the top too.
+        app.search_input('g');
+        app.selected_row = app.filtered_fits.len() - 1;
+        app.search_backspace();
+        assert!(!app.filtered_fits.is_empty());
+        assert_eq!(app.selected_row, 0);
+    }
+
+    #[test]
+    fn search_query_with_no_matches_keeps_selection_at_zero() {
+        let mut app = test_app();
+        clear_persisted_filters(&mut app);
+        app.all_fits = vec![test_fit("gemma-2b", FitLevel::Good, 90.0)];
+        app.providers = vec!["Test".to_string()];
+        app.selected_providers = vec![true];
+        app.apply_filters();
+
+        // A query that matches nothing must not panic on the clamp path and
+        // leaves the selection at the top.
+        app.search_input('z');
+        app.search_input('z');
+        app.search_input('z');
+        assert!(app.filtered_fits.is_empty());
+        assert_eq!(app.selected_row, 0);
     }
 }
