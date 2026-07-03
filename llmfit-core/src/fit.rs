@@ -2303,6 +2303,190 @@ mod tests {
         assert!(capped.notes.iter().any(|n| n.contains("Context capped at")));
     }
 
+    // ── Estimate calibration against measured community benchmarks ──────
+
+    /// Build simulated SystemSpecs for a leaderboard hardware preset label
+    /// like "RTX 3090 (24 GB)" or "Apple M4 Max (128 GB)". Returns None for
+    /// presets the calibration can't model faithfully (e.g. "CPU Only",
+    /// where the CPU model — and thus memory bandwidth — is unknown).
+    fn specs_for_preset_label(label: &str) -> Option<SystemSpecs> {
+        let (name, rest) = label.split_once(" (")?;
+        let vram_gb: f64 = rest
+            .trim_end_matches(')')
+            .trim_end_matches(" GB")
+            .trim()
+            .parse()
+            .ok()?;
+        if name == "CPU Only" {
+            return None;
+        }
+        let unified = name.starts_with("Apple");
+        let backend = if unified {
+            GpuBackend::Metal
+        } else if name.starts_with("RX ") || name.contains("Radeon") {
+            GpuBackend::Rocm
+        } else {
+            GpuBackend::Cuda
+        };
+        // The estimator is bandwidth-driven: without a bandwidth entry for
+        // this GPU the replay would exercise the generic fallback and tell
+        // us nothing about the preset.
+        crate::hardware::gpu_memory_bandwidth_gbps(name)?;
+        let total_ram_gb = if unified {
+            vram_gb
+        } else {
+            (2.0 * vram_gb).max(32.0)
+        };
+        Some(SystemSpecs {
+            total_ram_gb,
+            available_ram_gb: total_ram_gb * 0.85,
+            total_cpu_cores: 16,
+            cpu_name: "calibration".to_string(),
+            has_gpu: true,
+            gpu_vram_gb: Some(vram_gb),
+            total_gpu_vram_gb: Some(vram_gb),
+            gpu_name: Some(name.to_string()),
+            gpu_count: 1,
+            unified_memory: unified,
+            backend,
+            gpus: vec![crate::hardware::GpuInfo {
+                name: name.to_string(),
+                vram_gb: Some(vram_gb),
+                backend,
+                count: 1,
+                unified_memory: unified,
+            }],
+            cluster_mode: false,
+            cluster_node_count: 0,
+        })
+    }
+
+    /// Replay every usable measurement in the embedded localmaxxing cache
+    /// through estimate_tps and check the estimator's overall accuracy.
+    ///
+    /// This is the estimate↔reality feedback loop (#112/#119): the cache is
+    /// refreshed weekly, so a drift in either the estimator or the real
+    /// world shows up here. The bounds are deliberately generous — the test
+    /// exists to catch egregious regressions (e.g. a 3× systematic bias like
+    /// #449), not to enforce per-row precision.
+    #[test]
+    fn test_estimate_tps_calibration_against_leaderboard() {
+        let db = crate::models::ModelDatabase::embedded();
+        let models = db.get_all_models();
+        let config = CalcConfig::default();
+
+        // (preset label, est/measured ratio)
+        let mut ratios: Vec<(String, f64)> = Vec::new();
+        let mut skipped_unknown_model = 0usize;
+
+        for label in crate::benchmarks::cached_preset_labels() {
+            let Some(specs) = specs_for_preset_label(label) else {
+                continue;
+            };
+            let Some(resp) = crate::benchmarks::cached_leaderboard_for_preset(label) else {
+                continue;
+            };
+            for row in &resp.rows {
+                let Some(measured) = row.tok_s_out.filter(|t| *t > 0.5) else {
+                    continue;
+                };
+                // Single-request generation throughput only: batched serving
+                // measures a different quantity than estimate_tps models.
+                if row.batch_size.unwrap_or(1) > 1 {
+                    continue;
+                }
+                let hf_id = row.hf_id();
+                if hf_id.is_empty() {
+                    continue;
+                }
+                let slug = crate::models::canonical_slug(hf_id);
+                let Some(model) = models
+                    .iter()
+                    .find(|m| crate::models::canonical_slug(&m.name) == slug)
+                else {
+                    skipped_unknown_model += 1;
+                    continue;
+                };
+                let quant = {
+                    let q = row.quantization();
+                    if q.is_empty() {
+                        model.quantization.clone()
+                    } else {
+                        q.to_string()
+                    }
+                };
+                let engine = row.engine_name().to_lowercase();
+                let runtime = if engine.contains("mlx") {
+                    InferenceRuntime::Mlx
+                } else if engine.contains("vllm") {
+                    InferenceRuntime::Vllm
+                } else {
+                    InferenceRuntime::LlamaCpp
+                };
+                // Pure-GPU rows only: offload splits depend on unknown
+                // per-run layer placement, so estimates aren't comparable.
+                let ctx = row
+                    .context_length
+                    .unwrap_or(4096)
+                    .min(DEFAULT_ESTIMATION_CTX);
+                let mem = model.estimate_memory_gb(&quant, ctx);
+                let fits_gpu =
+                    specs.unified_memory || specs.gpu_vram_gb.map(|v| mem <= v).unwrap_or(false);
+                if !fits_gpu {
+                    continue;
+                }
+                let est = estimate_tps(model, &quant, &specs, RunMode::Gpu, runtime, &config);
+                if est <= 0.0 {
+                    continue;
+                }
+                ratios.push((label.to_string(), est / measured));
+            }
+        }
+
+        assert!(
+            ratios.len() >= 15,
+            "calibration needs a workable sample; got {} rows \
+             ({skipped_unknown_model} skipped as not in catalog) — did the \
+             cache or catalog shrink drastically?",
+            ratios.len()
+        );
+
+        let mut sorted: Vec<f64> = ratios.iter().map(|(_, r)| *r).collect();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let pct = |p: f64| sorted[((sorted.len() - 1) as f64 * p) as usize];
+        let (p10, median, p90) = (pct(0.10), pct(0.50), pct(0.90));
+
+        // Per-preset medians for the report.
+        let mut by_preset: std::collections::BTreeMap<String, Vec<f64>> = Default::default();
+        for (label, r) in &ratios {
+            by_preset.entry(label.clone()).or_default().push(*r);
+        }
+        println!(
+            "calibration: {} rows across {} presets ({} rows skipped: model not in catalog)",
+            ratios.len(),
+            by_preset.len(),
+            skipped_unknown_model
+        );
+        println!("  est/measured overall: p10={p10:.2} median={median:.2} p90={p90:.2}");
+        for (label, mut rs) in by_preset {
+            rs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            println!(
+                "  {label}: n={} median={:.2}",
+                rs.len(),
+                rs[(rs.len() - 1) / 2]
+            );
+        }
+
+        // Guardrails: a median outside this band means a systematic bias on
+        // the order of the #449 bug — investigate before loosening.
+        assert!(
+            (0.33..=3.0).contains(&median),
+            "estimate_tps median est/measured ratio {median:.2} is outside \
+             [0.33, 3.0] — systematic estimator bias against {} measured runs",
+            ratios.len()
+        );
+    }
+
     // ── Usable context (issue #621) ─────────────────────────────────────
 
     #[test]

@@ -340,6 +340,18 @@ pub fn cache_timestamp() -> Option<&'static str> {
     embedded_cache().scraped_at.as_deref()
 }
 
+/// All preset labels present in the embedded benchmark cache. Used by the
+/// estimate-calibration test to replay every cached measurement.
+pub fn cached_preset_labels() -> Vec<&'static str> {
+    let mut labels: Vec<&'static str> = embedded_cache()
+        .presets
+        .keys()
+        .map(|s| s.as_str())
+        .collect();
+    labels.sort_unstable();
+    labels
+}
+
 // ── Fetch functions ──────────────────────────────────────────────────
 
 /// Fetch benchmarks matching the user's hardware.
