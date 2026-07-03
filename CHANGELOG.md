@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.9.36](https://github.com/AlexsJones/llmfit/compare/v0.9.35...v0.9.36) (2026-07-03)
+
+
+### Features
+
+* add 'llmfit doctor' hardware diagnostic report for bug reports ([53663bc](https://github.com/AlexsJones/llmfit/commit/53663bcb9935d79c6f959b357d99d622d6cbcef1))
+* add `llmfit doctor` hardware diagnostic report ([bcd7dc0](https://github.com/AlexsJones/llmfit/commit/bcd7dc0c89b48909cfdd0ce20813bd58a2e84aeb))
+* add issue templates for bug reports ([bab1fe9](https://github.com/AlexsJones/llmfit/commit/bab1fe9166a037aac1e3d4da10484e0f91812bc1))
+* request 'llmfit doctor' output in the bug report template ([b4069d9](https://github.com/AlexsJones/llmfit/commit/b4069d927b9f7d271664d9e24324b3fe5716fa29))
+* **scoring:** benchmark-informed task alignment per use case ([ce6d37e](https://github.com/AlexsJones/llmfit/commit/ce6d37e034b3978e687a00589ac7ce10e81ae7e9))
+* **scoring:** benchmark-informed task alignment per use case (issue [#150](https://github.com/AlexsJones/llmfit/issues/150)) ([c994615](https://github.com/AlexsJones/llmfit/commit/c994615357f1b2577ba5096d7d176cf928f27a56))
+* serve over a Unix domain socket (--unix-socket) ([de62c2b](https://github.com/AlexsJones/llmfit/commit/de62c2bc7e2af432771e0036b35e5fb76a50ed7e))
+* serve over a Unix domain socket (--unix-socket) ([03d6ca5](https://github.com/AlexsJones/llmfit/commit/03d6ca5170df4f924b3bf24e94f27035fa26bb6a))
+* show usable context per model (native→achievable) in TUI, CLI, and JSON ([e33a3a3](https://github.com/AlexsJones/llmfit/commit/e33a3a31be5a7a7b3953c4f33a02732c1790353c)), closes [#621](https://github.com/AlexsJones/llmfit/issues/621)
+* usable-context display — native→achievable (closes [#621](https://github.com/AlexsJones/llmfit/issues/621)) ([1706929](https://github.com/AlexsJones/llmfit/commit/1706929ea367fd137117173f56827640bc04404c))
+* user-local custom model overlay (closes [#451](https://github.com/AlexsJones/llmfit/issues/451)) ([decef82](https://github.com/AlexsJones/llmfit/commit/decef827b3785df9a5c785b49ed128f98d5c3aaa))
+* user-local custom model overlay (custom_models.json) ([e55c8de](https://github.com/AlexsJones/llmfit/commit/e55c8dec388a1788b6093e0ef4c1091149cfe3d9)), closes [#451](https://github.com/AlexsJones/llmfit/issues/451)
+
+
+### Bug Fixes
+
+* guard optional attribute lookups in generated claim CEL ([c6f481f](https://github.com/AlexsJones/llmfit/commit/c6f481f27557d3e0fd6fc584fd1b1fa008ff95a4))
+* guard optional attribute lookups in generated claim CEL ([a6f3c6a](https://github.com/AlexsJones/llmfit/commit/a6f3c6a6bc11e3a4c141dc7e0c3891263958a712))
+* **hardware:** correct Intel GPU detection — iGPUs get the unified RAM pool, dGPUs get Vulkan VRAM ([4834767](https://github.com/AlexsJones/llmfit/commit/4834767462a7ac939ddb0306796e9661913f8310))
+* **hardware:** detect generic-named MI50-class accelerators (issue [#638](https://github.com/AlexsJones/llmfit/issues/638)) ([180f484](https://github.com/AlexsJones/llmfit/commit/180f4844630e4ca08e8971482a615564d5be64f8))
+* **hardware:** don't drop large-VRAM AMD accelerators with generic ROCm names ([bf16eb8](https://github.com/AlexsJones/llmfit/commit/bf16eb8e87b31e1c0f5c6154e82f7b8967d54085))
+* **hardware:** Intel iGPU unified-memory pool + discrete Arc VRAM via Vulkan (issue [#609](https://github.com/AlexsJones/llmfit/issues/609)) ([a120aa3](https://github.com/AlexsJones/llmfit/commit/a120aa38d9410b2d874bbe7c70653b4f2c1920b7))
+* **schema:** add 'audio' to capability enum ([a812232](https://github.com/AlexsJones/llmfit/commit/a812232f0eb02dc66544e508fe6e5e587acbd1f0))
+
 ## [0.9.35](https://github.com/AlexsJones/llmfit/compare/v0.9.34...v0.9.35) (2026-07-02)
 
 
