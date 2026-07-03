@@ -27,7 +27,11 @@ jobs:
         with:
           python-version: '3.12'
 
+      # HF_TOKEN raises HuggingFace API rate limits and unlocks gated-model
+      # metadata (the scraper warns-and-skips gated repos without it).
       - name: Refresh model database
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: python3 scripts/scrape_hf_models.py -n 5000
 
       # Refresh the community leaderboard cache alongside the catalog. The
