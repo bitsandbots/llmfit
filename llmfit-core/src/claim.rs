@@ -114,6 +114,33 @@ pub fn claim_name(model: &LlmModel) -> String {
     format!("{base}-fit")
 }
 
+/// Render the resolved fit bounds as machine-readable JSON, for programmatic
+/// consumers (the llmfit-dra ModelClaim controller renders its own
+/// ResourceClaimTemplate from these numbers instead of scraping YAML).
+/// `resolver_version` is the binary version, recorded so consumers can
+/// re-resolve when the model database advances.
+pub fn render_json(
+    model: &LlmModel,
+    target: &ClaimTarget,
+    resolver_version: &str,
+) -> Result<String, String> {
+    let b = fit_bounds(model, target)?;
+    let name = target.name.clone().unwrap_or_else(|| claim_name(model));
+    let out = serde_json::json!({
+        "model": model.name,
+        "claimName": name,
+        "quant": b.quant,
+        "weightsGb": (b.weights_gb * 10.0).round() / 10.0,
+        "memoryGi": b.memory_gi,
+        "minBandwidthGBs": b.min_bandwidth_gbs,
+        "minTps": target.min_tps,
+        "efficiencyPct": target.efficiency_pct,
+        "deviceClass": target.device_class,
+        "resolverVersion": resolver_version,
+    });
+    serde_json::to_string_pretty(&out).map_err(|e| format!("JSON serialization failed: {e}"))
+}
+
 /// Render the claim YAML. Built as a template string (not serde) so the
 /// output carries provenance comments explaining where every constant came
 /// from — the file is meant to be committed to GitOps repos and read by
@@ -211,6 +238,35 @@ mod tests {
             "use_case": "general",
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn render_json_golden() {
+        let json = render_json(
+            &model("Q4_K_M", Some(6.0)),
+            &ClaimTarget::default(),
+            "9.9.9-test",
+        )
+        .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["model"], "Test Model 7B");
+        assert_eq!(v["claimName"], "test-model-7b-fit");
+        assert_eq!(v["quant"], "Q4_K_M");
+        assert_eq!(v["memoryGi"], 6);
+        assert_eq!(v["minBandwidthGBs"], 148);
+        assert_eq!(v["minTps"], 20.0);
+        assert_eq!(v["efficiencyPct"], 55);
+        assert_eq!(v["deviceClass"], "llmfit.ai");
+        assert_eq!(v["resolverVersion"], "9.9.9-test");
+        // weightsGb rounded to one decimal
+        assert!(v["weightsGb"].as_f64().unwrap() > 3.0);
+    }
+
+    #[test]
+    fn render_json_propagates_resolution_errors() {
+        let mut t = ClaimTarget::default();
+        t.min_tps = 0.0;
+        assert!(render_json(&model("Q4_K_M", None), &t, "x").is_err());
     }
 
     #[test]

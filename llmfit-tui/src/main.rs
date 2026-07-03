@@ -2611,10 +2611,21 @@ fn main() {
                     quant,
                     name,
                 };
-                match resolve_model_selector(db.get_all_models(), &model)
-                    .and_then(|m| llmfit_core::claim::render(m, &target))
-                {
-                    Ok(yaml) => print!("{}", yaml),
+                let rendered = resolve_model_selector(db.get_all_models(), &model).and_then(|m| {
+                    if cli.json {
+                        llmfit_core::claim::render_json(m, &target, env!("CARGO_PKG_VERSION"))
+                    } else {
+                        llmfit_core::claim::render(m, &target)
+                    }
+                });
+                match rendered {
+                    Ok(out) => {
+                        if cli.json {
+                            println!("{}", out)
+                        } else {
+                            print!("{}", out)
+                        }
+                    }
                     Err(err) => {
                         eprintln!("Error: {}", err);
                         std::process::exit(1);
