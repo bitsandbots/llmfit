@@ -254,6 +254,11 @@ pub struct ModelFit {
     /// What the tok/s estimate assumes — method, bandwidths, efficiency —
     /// so the number can be reproduced and verified (issue #292).
     pub estimate_basis: EstimateBasis,
+    /// Community-measured throughput on hardware matching this system
+    /// (localmaxxing.com data), when available. Ground truth, displayed
+    /// with priority over `estimated_tps`. Set after analysis, like
+    /// `installed`.
+    pub measured_tps: Option<crate::benchmarks::MeasuredTps>,
 }
 
 impl ModelFit {
@@ -362,6 +367,7 @@ impl ModelFit {
                     method: "unsupported".to_string(),
                     ..EstimateBasis::default()
                 },
+                measured_tps: None,
             };
         }
 
@@ -670,6 +676,7 @@ impl ModelFit {
             effective_context_length: estimation_ctx,
             usable_context,
             estimate_basis,
+            measured_tps: None, // set later, like `installed`
         }
     }
 

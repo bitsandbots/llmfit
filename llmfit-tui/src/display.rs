@@ -125,7 +125,10 @@ pub fn display_model_fits(fits: &[ModelFit]) {
                 provider: fit.model.provider.clone(),
                 size: fit.model.parameter_count.clone(),
                 score: format!("{:.0}", fit.score),
-                tps: format!("{:.1}", fit.estimated_tps),
+                tps: match &fit.measured_tps {
+                    Some(m) => format!("{:.1} ✓", m.tok_s),
+                    None => format!("{:.1}", fit.estimated_tps),
+                },
                 quant: fit.best_quant.clone(),
                 runtime: fit.runtime_text().to_string(),
                 mode: fit.run_mode_text().to_string(),
@@ -145,6 +148,11 @@ pub fn display_model_fits(fits: &[ModelFit]) {
     println!(
         "  Note: tok/s values are baseline estimates; real runtime depends on engine/runtime."
     );
+    if fits.iter().any(|f| f.measured_tps.is_some()) {
+        println!(
+            "  ✓ = measured by the community on hardware matching yours (localmaxxing.com), not an estimate."
+        );
+    }
 }
 
 pub fn display_model_detail(fit: &ModelFit) {
@@ -545,6 +553,16 @@ fn display_estimate_basis(fit: &ModelFit) {
         return;
     }
 
+    if let Some(m) = &fit.measured_tps {
+        println!("{}", "Measured on Matching Hardware:".bold().underline());
+        println!(
+            "  {:.1} tok/s median across {} community run(s) on {} (localmaxxing.com)",
+            m.tok_s, m.sample_count, m.hardware_label
+        );
+        println!("  Real user data — trust this over the formula estimate below.");
+        println!();
+    }
+
     println!("{}", "Estimate Basis:".bold().underline());
     match basis.method.as_str() {
         "gpu_bandwidth_roofline" => {
@@ -822,6 +840,7 @@ fn fit_to_json(fit: &ModelFit) -> serde_json::Value {
         "ollama_name": ollama_name_for(&fit.model.name),
         "estimate_basis": serde_json::to_value(&fit.estimate_basis).unwrap(),
         "verify_command": generate_llamabench_command(fit),
+        "measured_tps": serde_json::to_value(&fit.measured_tps).unwrap(),
     })
 }
 
@@ -1075,6 +1094,7 @@ mod tests {
             effective_context_length: 8_192,
             usable_context: 8_192,
             estimate_basis: Default::default(),
+            measured_tps: None,
         }
     }
 
