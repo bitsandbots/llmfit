@@ -17,7 +17,7 @@
   <a href="https://about.signpath.io"><img src="https://img.shields.io/badge/SignPath-signed-brightgreen?logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiIgZmlsbD0id2hpdGUiIHZpZXdCb3g9IjAgMCAxNiAxNiI+PHBhdGggZD0iTTEwLjA2NyA0LjU2N2wtNC43MzQgNC43MzMtMS40LTEuNGExIDEgMCAwIDAtMS40MTQgMS40MTRsMi4xIDIuMWExIDEgMCAwIDAgMS40MTQgMGw1LjQ0LTUuNDRhMSAxIDAgMCAwLTEuNDE0LTEuNDE0eiIvPjwvc3ZnPg==" alt="Signed with SignPath"></a>
 </p>
 
-> **New: [Community Leaderboard](#community-leaderboard-b)** — Browse real-world performance data from actual users. Press `b` to see measured tok/s, TTFT, and VRAM for any GPU — not just yours. Pick from 27+ hardware presets (RTX 5090 to Apple M1) with `H` to compare real numbers before you buy or build.
+> **🎉 [llmfit 1.0 is here](https://github.com/AlexsJones/llmfit/releases/tag/v1.0.0) — the release where the numbers became verifiable.** Your machine's RAM bandwidth is now *measured*, not assumed. Real community benchmarks (marked `✓`) take priority over formula estimates when we have data for your GPU. And every estimate ships its inputs — `llmfit info` shows exactly what the number assumes and how to verify it yourself. [Read the full story →](https://github.com/AlexsJones/llmfit/discussions/708)
 
 **Hundreds of models & providers. One command to find what runs on your hardware.**
 
