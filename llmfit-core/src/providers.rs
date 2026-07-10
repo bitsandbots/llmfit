@@ -2501,7 +2501,7 @@ fn docker_mr_installed_matches(installed_name: &str, candidate: &str) -> bool {
 
 /// Strip quantization suffix from a GGUF file stem.
 /// "llama-3.1-8b-instruct-q4_k_m" → "llama-3.1-8b-instruct"
-fn strip_gguf_quant_suffix(stem: &str) -> Option<String> {
+pub fn strip_gguf_quant_suffix(stem: &str) -> Option<String> {
     let quant_patterns = [
         "-q8_0", "-q6_k", "-q6_k_l", "-q5_k_m", "-q5_k_s", "-q4_k_m", "-q4_k_s", "-q4_0",
         "-q3_k_m", "-q3_k_s", "-q2_k", "-iq4_xs", "-iq3_m", "-iq2_m", "-iq1_m", "-f16", "-f32",

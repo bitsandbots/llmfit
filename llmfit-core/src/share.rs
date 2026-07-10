@@ -266,16 +266,35 @@ pub fn share_results(
     }
 
     let token = resolve_token()?;
-    let login = whoami(&token)?;
-    eprintln!("  Authenticated as {login}.");
+    let pr_url = submit_results(results, specs, &token)?;
+    Ok(Some(pr_url))
+}
 
-    ensure_fork(&token, &login)?;
-    let base_sha = upstream_head_sha(&token)?;
+/// Non-interactive core of the share flow: fork the repo, commit the result
+/// file to a new branch, and open a pull request using an already-resolved
+/// token. Never prompts or reads stdin, so it is safe to call from a worker
+/// thread while a TUI owns the terminal. Returns the PR URL.
+pub fn submit_results(
+    results: &[BenchResult],
+    specs: &SystemSpecs,
+    token: &str,
+) -> Result<String, String> {
+    if results.is_empty() {
+        return Err("no benchmark results to share".to_string());
+    }
+    let submission = build_submission(results, specs);
+    let json =
+        serde_json::to_string_pretty(&submission).map_err(|e| format!("serialize failed: {e}"))?;
+
+    let login = whoami(token)?;
+
+    ensure_fork(token, &login)?;
+    let base_sha = upstream_head_sha(token)?;
 
     let slug = hardware_slug(specs);
     let hash = short_hash(&json);
     let branch = format!("bench/{slug}-{hash}");
-    create_branch(&token, &login, &branch, &base_sha)?;
+    create_branch(token, &login, &branch, &base_sha)?;
 
     let path = format!("{SUBMISSION_DIR}/{slug}/{}-{hash}.json", now_unix());
     let message = format!(
@@ -286,10 +305,9 @@ pub fn share_results(
             .unwrap_or("model"),
         slug
     );
-    put_file(&token, &login, &branch, &path, &json, &message)?;
+    put_file(token, &login, &branch, &path, &json, &message)?;
 
-    let pr_url = open_pr(&token, &login, &branch, results, &slug)?;
-    Ok(Some(pr_url))
+    open_pr(token, &login, &branch, results, &slug)
 }
 
 fn confirm(prompt: &str) -> Result<bool, String> {
@@ -307,30 +325,47 @@ fn confirm(prompt: &str) -> Result<bool, String> {
 // Authentication
 // ---------------------------------------------------------------------------
 
-/// Resolve a GitHub token: env var, then cached token, then interactive device flow.
-fn resolve_token() -> Result<String, String> {
+/// Resolve a GitHub token without any user interaction: env vars, then the
+/// cached token from a previous device-flow login. Returns `None` when an
+/// interactive login would be required.
+pub fn resolve_token_noninteractive() -> Option<String> {
     for var in ["GITHUB_TOKEN", "GH_TOKEN"] {
         if let Some(t) = std::env::var(var)
             .ok()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
         {
-            return Ok(t);
+            return Some(t);
         }
     }
-    if let Some(t) = read_cached_token() {
+    read_cached_token()
+}
+
+/// The OAuth App client id for the device flow, or `None` when only the
+/// unregistered placeholder is available (interactive login not possible).
+pub fn oauth_client_id() -> Option<String> {
+    let id = std::env::var("LLMFIT_GH_CLIENT_ID").unwrap_or_else(|_| DEFAULT_CLIENT_ID.to_string());
+    (id != DEFAULT_CLIENT_ID).then_some(id)
+}
+
+/// Persist a token obtained via the device flow for future runs.
+pub fn cache_token(token: &str) -> Result<(), String> {
+    write_cached_token(token)
+}
+
+/// Resolve a GitHub token: env var, then cached token, then interactive device flow.
+fn resolve_token() -> Result<String, String> {
+    if let Some(t) = resolve_token_noninteractive() {
         return Ok(t);
     }
-    let client_id =
-        std::env::var("LLMFIT_GH_CLIENT_ID").unwrap_or_else(|_| DEFAULT_CLIENT_ID.to_string());
-    if client_id == DEFAULT_CLIENT_ID {
+    let Some(client_id) = oauth_client_id() else {
         return Err(
             "no GitHub token found. Set GITHUB_TOKEN (or GH_TOKEN), or set \
              LLMFIT_GH_CLIENT_ID to a registered OAuth App client id to enable \
              interactive login."
                 .to_string(),
         );
-    }
+    };
     let token = device_flow(&client_id)?;
     if let Err(e) = write_cached_token(&token) {
         eprintln!("  Warning: could not cache token: {e}");
@@ -363,9 +398,31 @@ fn write_cached_token(token: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Run the GitHub OAuth device flow, blocking until the user authorizes or the
-/// code expires. Returns the access token.
-fn device_flow(client_id: &str) -> Result<String, String> {
+/// A started device-flow authorization: show `user_code` / `verification_uri`
+/// to the user, then call [`device_flow_poll`] every `interval` seconds.
+pub struct DeviceAuth {
+    pub user_code: String,
+    pub verification_uri: String,
+    pub device_code: String,
+    /// Minimum seconds to wait between polls.
+    pub interval: u64,
+}
+
+/// Outcome of a single device-flow poll.
+pub enum DevicePoll {
+    /// Authorized; carries the access token.
+    Token(String),
+    /// User has not authorized yet — poll again after `interval`.
+    Pending,
+    /// Server asked to slow down — add ~5s to the interval and poll again.
+    SlowDown,
+    /// Terminal failure (expired, denied, or protocol error).
+    Failed(String),
+}
+
+/// Begin the GitHub OAuth device flow: request a user code for the given
+/// OAuth App client id.
+pub fn device_flow_start(client_id: &str) -> Result<DeviceAuth, String> {
     let resp = ureq::post("https://github.com/login/device/code")
         .config()
         .http_status_as_error(false)
@@ -379,56 +436,76 @@ fn device_flow(client_id: &str) -> Result<String, String> {
         .read_json()
         .map_err(|e| format!("device code parse failed: {e}"))?;
 
-    let device_code = v["device_code"]
-        .as_str()
-        .ok_or("device flow: missing device_code")?
-        .to_string();
-    let user_code = v["user_code"].as_str().unwrap_or("").to_string();
-    let verification_uri = v["verification_uri"]
-        .as_str()
-        .unwrap_or("https://github.com/login/device")
-        .to_string();
-    let mut interval = v["interval"].as_u64().unwrap_or(5).max(1);
+    Ok(DeviceAuth {
+        device_code: v["device_code"]
+            .as_str()
+            .ok_or("device flow: missing device_code")?
+            .to_string(),
+        user_code: v["user_code"].as_str().unwrap_or("").to_string(),
+        verification_uri: v["verification_uri"]
+            .as_str()
+            .unwrap_or("https://github.com/login/device")
+            .to_string(),
+        interval: v["interval"].as_u64().unwrap_or(5).max(1),
+    })
+}
+
+/// Poll the device flow once. The caller owns the pacing (sleep `interval`
+/// seconds between calls), which lets a TUI keep its event loop responsive.
+pub fn device_flow_poll(client_id: &str, device_code: &str) -> Result<DevicePoll, String> {
+    let resp = ureq::post("https://github.com/login/oauth/access_token")
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .header("Accept", "application/json")
+        .header("User-Agent", USER_AGENT)
+        .send_json(json!({
+            "client_id": client_id,
+            "device_code": device_code,
+            "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+        }))
+        .map_err(|e| format!("token poll failed: {e}"))?;
+    let v: Value = resp
+        .into_body()
+        .read_json()
+        .map_err(|e| format!("token poll parse failed: {e}"))?;
+
+    if let Some(tok) = v["access_token"].as_str() {
+        return Ok(DevicePoll::Token(tok.to_string()));
+    }
+    Ok(match v["error"].as_str() {
+        Some("authorization_pending") => DevicePoll::Pending,
+        Some("slow_down") => DevicePoll::SlowDown,
+        Some("expired_token") => {
+            DevicePoll::Failed("device code expired before authorization".into())
+        }
+        Some("access_denied") => DevicePoll::Failed("authorization was denied".into()),
+        Some(other) => DevicePoll::Failed(format!("authorization failed: {other}")),
+        None => DevicePoll::Failed("unexpected response while polling for token".into()),
+    })
+}
+
+/// Run the GitHub OAuth device flow, blocking until the user authorizes or the
+/// code expires. Returns the access token. (CLI path; prints to stderr.)
+fn device_flow(client_id: &str) -> Result<String, String> {
+    let auth = device_flow_start(client_id)?;
+    let mut interval = auth.interval;
 
     eprintln!("\n  To authorize llmfit to open a pull request on your behalf:\n");
-    eprintln!("    1. Open {verification_uri}");
-    eprintln!("    2. Enter code: {user_code}\n");
+    eprintln!("    1. Open {}", auth.verification_uri);
+    eprintln!("    2. Enter code: {}\n", auth.user_code);
     eprintln!("  Waiting for authorization (Ctrl-C to cancel)...");
 
     loop {
         std::thread::sleep(Duration::from_secs(interval + 1));
-        let resp = ureq::post("https://github.com/login/oauth/access_token")
-            .config()
-            .http_status_as_error(false)
-            .build()
-            .header("Accept", "application/json")
-            .header("User-Agent", USER_AGENT)
-            .send_json(json!({
-                "client_id": client_id,
-                "device_code": device_code,
-                "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
-            }))
-            .map_err(|e| format!("token poll failed: {e}"))?;
-        let v: Value = resp
-            .into_body()
-            .read_json()
-            .map_err(|e| format!("token poll parse failed: {e}"))?;
-
-        if let Some(tok) = v["access_token"].as_str() {
-            return Ok(tok.to_string());
-        }
-        match v["error"].as_str() {
-            Some("authorization_pending") => continue,
-            Some("slow_down") => {
+        match device_flow_poll(client_id, &auth.device_code)? {
+            DevicePoll::Token(tok) => return Ok(tok),
+            DevicePoll::Pending => continue,
+            DevicePoll::SlowDown => {
                 interval += 5;
                 continue;
             }
-            Some("expired_token") => {
-                return Err("device code expired before authorization; run --share again".into());
-            }
-            Some("access_denied") => return Err("authorization was denied".into()),
-            Some(other) => return Err(format!("authorization failed: {other}")),
-            None => return Err("unexpected response while polling for token".into()),
+            DevicePoll::Failed(e) => return Err(e),
         }
     }
 }
@@ -513,7 +590,6 @@ fn ensure_fork(token: &str, login: &str) -> Result<(), String> {
         return Ok(());
     }
 
-    eprintln!("  Creating fork of {UPSTREAM_OWNER}/{UPSTREAM_REPO}...");
     let (status, body) = api(
         "POST",
         &format!("{API}/repos/{UPSTREAM_OWNER}/{UPSTREAM_REPO}/forks"),
