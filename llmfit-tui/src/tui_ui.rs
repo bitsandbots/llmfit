@@ -3412,7 +3412,10 @@ fn draw_bench_offer_popup(frame: &mut Frame, app: &App, tc: &ThemeColors) {
     match app.bench_offer_state {
         BenchOfferState::Offer => {
             let (mark, mark_style) = if app.bench_offer_share {
-                ("[x]", Style::default().fg(tc.good).add_modifier(Modifier::BOLD))
+                (
+                    "[x]",
+                    Style::default().fg(tc.good).add_modifier(Modifier::BOLD),
+                )
             } else {
                 ("[ ]", Style::default().fg(tc.muted))
             };
@@ -3504,7 +3507,9 @@ fn draw_bench_offer_popup(frame: &mut Frame, app: &App, tc: &ThemeColors) {
             " Benchmark this model ",
             Style::default().fg(tc.title).add_modifier(Modifier::BOLD),
         ));
-    let paragraph = Paragraph::new(lines).block(block).wrap(Wrap { trim: false });
+    let paragraph = Paragraph::new(lines)
+        .block(block)
+        .wrap(Wrap { trim: false });
     frame.render_widget(paragraph, popup_area);
 }
 

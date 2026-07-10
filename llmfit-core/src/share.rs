@@ -299,10 +299,7 @@ pub fn submit_results(
     let path = format!("{SUBMISSION_DIR}/{slug}/{}-{hash}.json", now_unix());
     let message = format!(
         "data: community benchmark ({} on {})",
-        results
-            .first()
-            .map(|r| r.model.as_str())
-            .unwrap_or("model"),
+        results.first().map(|r| r.model.as_str()).unwrap_or("model"),
         slug
     );
     put_file(token, &login, &branch, &path, &json, &message)?;
@@ -517,12 +514,7 @@ fn device_flow(client_id: &str) -> Result<String, String> {
 /// Issue an authenticated GitHub API request. Returns `(status, body)` where
 /// `body` is parsed JSON (or `Value::Null` when there is none). Non-2xx statuses
 /// are returned rather than raised so callers can react to them.
-fn api(
-    method: &str,
-    url: &str,
-    token: &str,
-    body: Option<&Value>,
-) -> Result<(u16, Value), String> {
+fn api(method: &str, url: &str, token: &str, body: Option<&Value>) -> Result<(u16, Value), String> {
     let auth = format!("Bearer {token}");
     let resp = match method {
         "GET" => ureq::get(url)
@@ -612,7 +604,8 @@ fn ensure_fork(token: &str, login: &str) -> Result<(), String> {
 }
 
 fn upstream_head_sha(token: &str) -> Result<String, String> {
-    let url = format!("{API}/repos/{UPSTREAM_OWNER}/{UPSTREAM_REPO}/git/ref/heads/{UPSTREAM_BRANCH}");
+    let url =
+        format!("{API}/repos/{UPSTREAM_OWNER}/{UPSTREAM_REPO}/git/ref/heads/{UPSTREAM_BRANCH}");
     let (status, body) = api("GET", &url, token, None)?;
     if !(200..300).contains(&status) {
         return Err(api_error(status, &body));
@@ -786,8 +779,8 @@ mod tests {
         );
         let value = serde_json::to_value(&submission).unwrap();
 
-        let schema_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("data/community/schema.json");
+        let schema_path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("data/community/schema.json");
         let schema: Value =
             serde_json::from_str(&std::fs::read_to_string(&schema_path).unwrap()).unwrap();
         let validator = jsonschema::validator_for(&schema).unwrap();

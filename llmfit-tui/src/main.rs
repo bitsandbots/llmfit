@@ -2050,7 +2050,9 @@ fn run_bench(
     if all {
         let targets = bench::discover_all_targets();
         if targets.is_empty() {
-            eprintln!("No providers or models found. Start Ollama, vLLM, MLX, or llama-server first.");
+            eprintln!(
+                "No providers or models found. Start Ollama, vLLM, MLX, or llama-server first."
+            );
             std::process::exit(1);
         }
 
@@ -2355,7 +2357,9 @@ fn run_quality_bench(
     let targets: Vec<bench::BenchTarget> = if all {
         let all_targets = bench::discover_all_targets();
         if all_targets.is_empty() {
-            eprintln!("No providers or models found. Start Ollama, vLLM, MLX, or llama-server first.");
+            eprintln!(
+                "No providers or models found. Start Ollama, vLLM, MLX, or llama-server first."
+            );
             std::process::exit(1);
         }
         if skip_patterns.is_empty() {
@@ -3007,8 +3011,7 @@ fn main() {
                 yes,
             } => {
                 // No model/flags → launch bench TUI view
-                let is_bare =
-                    model.is_none() && !all && !json && !quality && !routing && !share;
+                let is_bare = model.is_none() && !all && !json && !quality && !routing && !share;
                 if is_bare {
                     if let Err(e) = run_tui_bench(&overrides, context_limit, cli.api_key) {
                         eprintln!("Error running bench TUI: {}", e);
@@ -3031,7 +3034,9 @@ fn main() {
                         dry_run,
                         assume_yes: yes,
                     });
-                    run_bench(model, &provider, url, runs, all, json, share_opts, &overrides);
+                    run_bench(
+                        model, &provider, url, runs, all, json, share_opts, &overrides,
+                    );
                 }
             }
         }

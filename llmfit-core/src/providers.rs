@@ -4094,10 +4094,22 @@ mod tests {
             .iter()
             .map(|s| s.to_string())
             .collect();
-        assert!(is_model_installed_llamacpp("tiny-random/gemma-3", &installed));
-        assert!(!is_model_installed_llamacpp("google/gemma-3-27b-it", &installed));
-        assert!(!is_model_installed_llamacpp("google/gemma-3-4b-it", &installed));
-        assert!(!is_model_installed_llamacpp("unsloth/gemma-3-270m-it", &installed));
+        assert!(is_model_installed_llamacpp(
+            "tiny-random/gemma-3",
+            &installed
+        ));
+        assert!(!is_model_installed_llamacpp(
+            "google/gemma-3-27b-it",
+            &installed
+        ));
+        assert!(!is_model_installed_llamacpp(
+            "google/gemma-3-4b-it",
+            &installed
+        ));
+        assert!(!is_model_installed_llamacpp(
+            "unsloth/gemma-3-270m-it",
+            &installed
+        ));
     }
 
     // ── gguf_pull_tag ────────────────────────────────────────────────
