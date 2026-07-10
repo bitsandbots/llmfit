@@ -3495,7 +3495,7 @@ fn draw_bench_offer_popup(frame: &mut Frame, app: &App, tc: &ThemeColors) {
             }
             if let Some(url) = &app.bench_offer_pr_url {
                 lines.push(Line::from(vec![
-                    Span::styled("  PR opened: ", Style::default().fg(tc.fg)),
+                    Span::styled("  Results PR: ", Style::default().fg(tc.fg)),
                     Span::styled(url.clone(), Style::default().fg(tc.accent)),
                 ]));
             }

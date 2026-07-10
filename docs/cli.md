@@ -138,9 +138,12 @@ starts, so a missing or expired token fails fast instead of after minutes of
 benching.
 
 `--share` then forks the repo, commits one result file per stored submission
-under `llmfit-core/data/community/<hardware>/`, and opens a pull request.
-Nothing is submitted until you confirm, and `--dry-run` never touches the
-network.
+under `llmfit-core/data/community/<hardware>/`, and opens a pull request — or,
+if you already have an open benchmark PR, **appends the new results to it**
+instead of opening another. Submissions are idempotent: file names mirror your
+local store, so retrying after a partial failure skips anything that already
+landed. Nothing is submitted until you confirm, and `--dry-run` never touches
+the network.
 
 > Interactive login requires `LLMFIT_GH_CLIENT_ID` to be set to a registered
 > GitHub OAuth App client id. Until one is configured, use a `GITHUB_TOKEN` /

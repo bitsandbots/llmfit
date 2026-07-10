@@ -27,11 +27,15 @@ llmfit bench --all --share --dry-run
 ```
 community/
   <hardware-slug>/
-    <unix-timestamp>-<hash>-<n>.json
+    <unix-timestamp>-<hash>.json
 ```
 
 Files are namespaced by hardware and carry a content hash so concurrent
-submissions never collide.
+submissions never collide. Each file name mirrors the contributor's local
+store entry, which makes submissions idempotent: if a contributor already has
+an open benchmark PR, new results are appended to it (instead of opening
+another PR), and a retry after a partial failure skips files that already
+landed rather than duplicating them.
 
 ## Format
 

@@ -351,12 +351,12 @@ pub fn mark_shared(stored: &[StoredBenchmark]) {
 /// user, then uploads and marks them shared. Pass a pre-validated `token`
 /// (from [`preflight_auth`]) to skip credential resolution here.
 ///
-/// Returns `Ok(Some(pr_url))` on success, `Ok(None)` if the user cancelled or
-/// `--dry-run` was set, and `Err(_)` on failure.
+/// Returns `Ok(Some(outcome))` on success, `Ok(None)` if the user cancelled
+/// or `--dry-run` was set, and `Err(_)` on failure.
 pub fn share_all_pending(
     opts: &ShareOptions,
     token: Option<String>,
-) -> Result<Option<String>, String> {
+) -> Result<Option<SubmitOutcome>, String> {
     let stored = pending_benchmarks();
     if stored.is_empty() {
         return Err(
@@ -402,51 +402,132 @@ pub fn share_all_pending(
         Some(t) => t,
         None => preflight_auth()?,
     };
-    let pr_url = submit_stored(&stored, &token)?;
+    let outcome = submit_stored(&stored, &token)?;
     mark_shared(&stored);
-    Ok(Some(pr_url))
+    Ok(Some(outcome))
 }
 
-/// Non-interactive core of the share flow: fork the repo, commit each stored
-/// submission to one new branch, and open a single pull request using an
-/// already-resolved token. Never prompts or reads stdin, so it is safe to
-/// call from a worker thread while a TUI owns the terminal. Returns the PR
-/// URL; the caller is responsible for [`mark_shared`] afterwards.
-pub fn submit_stored(stored: &[StoredBenchmark], token: &str) -> Result<String, String> {
+/// Outcome of uploading stored submissions.
+pub struct SubmitOutcome {
+    /// PR that now contains the results — an already-open bench PR when one
+    /// existed, otherwise a newly opened one. `None` when every file had
+    /// already been submitted upstream and there was nothing to open a PR for.
+    pub pr_url: Option<String>,
+    /// Results were appended to an existing open PR instead of a new one.
+    pub reused_existing_pr: bool,
+    /// Files actually uploaded this time.
+    pub uploaded: usize,
+    /// Files skipped because a submission with the same name already exists
+    /// upstream (e.g. a retry after a partially failed share).
+    pub skipped: usize,
+}
+
+/// Non-interactive core of the share flow, safe to call from a worker thread
+/// while a TUI owns the terminal (never prompts or reads stdin). Forks the
+/// repo, then either **appends** the stored submissions to the user's
+/// already-open benchmark PR (avoiding one PR per bench run) or commits them
+/// to a new branch and opens one. Upstream file names mirror the local store
+/// names, so re-submitting after a partial failure skips what already landed
+/// instead of duplicating it. The caller is responsible for [`mark_shared`]
+/// afterwards.
+pub fn submit_stored(stored: &[StoredBenchmark], token: &str) -> Result<SubmitOutcome, String> {
     if stored.is_empty() {
         return Err("no benchmark results to share".to_string());
     }
 
-    // Re-stamp the submission time: stored files may be days old.
     let now = now_unix();
-    let files: Vec<(String, String)> = stored
-        .iter()
-        .map(|s| {
-            let mut payload = s.payload.clone();
-            payload["submittedAtUnix"] = json!(now);
-            let json = serde_json::to_string_pretty(&payload)
-                .map_err(|e| format!("serialize failed: {e}"))?;
-            Ok((payload_slug(&payload), json))
-        })
-        .collect::<Result<_, String>>()?;
+    let files = prepare_files(stored, now)?;
 
     let login = whoami(token)?;
     ensure_fork(token, &login)?;
-    let base_sha = upstream_head_sha(token)?;
 
-    let all_json: String = files.iter().map(|(_, j)| j.as_str()).collect();
+    // A lookup failure only means we open a fresh PR — never a lost result —
+    // so it is deliberately soft.
+    if let Some((branch, pr_url)) = find_open_bench_pr(token, &login).unwrap_or(None) {
+        let (uploaded, skipped) = put_files(token, &login, &branch, &files)?;
+        return Ok(SubmitOutcome {
+            pr_url: Some(pr_url),
+            reused_existing_pr: true,
+            uploaded,
+            skipped,
+        });
+    }
+
+    let base_sha = upstream_head_sha(token)?;
+    let all_json: String = files.iter().map(|(_, _, j)| j.as_str()).collect();
     let hash = short_hash(&all_json);
     let slug = files[0].0.clone();
     let branch = format!("bench/{slug}-{hash}");
     create_branch(token, &login, &branch, &base_sha)?;
 
-    for (i, (file_slug, json)) in files.iter().enumerate() {
-        let path = format!("{SUBMISSION_DIR}/{file_slug}/{now}-{hash}-{i}.json");
-        let message = format!("data: community benchmark ({file_slug})");
-        put_file(token, &login, &branch, &path, json, &message)?;
+    let (uploaded, skipped) = put_files(token, &login, &branch, &files)?;
+    if uploaded == 0 {
+        // Everything was already upstream (e.g. an earlier PR merged but the
+        // local move to shared/ failed). No diff — GitHub would reject a PR.
+        return Ok(SubmitOutcome {
+            pr_url: None,
+            reused_existing_pr: false,
+            uploaded,
+            skipped,
+        });
     }
 
-    open_pr(token, &login, &branch, stored, &slug)
+    let pr_url = open_pr(token, &login, &branch, stored, &slug)?;
+    Ok(SubmitOutcome {
+        pr_url: Some(pr_url),
+        reused_existing_pr: false,
+        uploaded,
+        skipped,
+    })
+}
+
+/// Build the upload set as `(hardware slug, file name, payload json)` per
+/// stored submission, re-stamping the submission time (stored files may be
+/// days old). Upstream file names reuse the local store name (record
+/// timestamp + content hash): stable across retries, so a re-upload of the
+/// same stored result targets the same path and is skipped, not duplicated.
+fn prepare_files(
+    stored: &[StoredBenchmark],
+    now: u64,
+) -> Result<Vec<(String, String, String)>, String> {
+    stored
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let mut payload = s.payload.clone();
+            payload["submittedAtUnix"] = json!(now);
+            let json = serde_json::to_string_pretty(&payload)
+                .map_err(|e| format!("serialize failed: {e}"))?;
+            let name = s
+                .path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("{now}-{i}.json"));
+            Ok((payload_slug(&payload), name, json))
+        })
+        .collect()
+}
+
+/// Commit each prepared file to `branch`, returning `(uploaded, skipped)`
+/// where skipped counts files that already existed upstream.
+fn put_files(
+    token: &str,
+    login: &str,
+    branch: &str,
+    files: &[(String, String, String)],
+) -> Result<(usize, usize), String> {
+    let (mut uploaded, mut skipped) = (0usize, 0usize);
+    for (slug, name, json) in files {
+        let path = format!("{SUBMISSION_DIR}/{slug}/{name}");
+        let message = format!("data: community benchmark ({slug})");
+        if put_file(token, login, branch, &path, json, &message)? {
+            uploaded += 1;
+        } else {
+            skipped += 1;
+        }
+    }
+    Ok((uploaded, skipped))
 }
 
 fn confirm(prompt: &str) -> Result<bool, String> {
@@ -823,6 +904,11 @@ fn create_branch(token: &str, login: &str, branch: &str, sha: &str) -> Result<()
     Err(api_error(status, &body))
 }
 
+/// Create `path` on `branch`. Returns `Ok(true)` when the file was written,
+/// `Ok(false)` when it already exists there — creating over an existing path
+/// makes GitHub answer 422 `"sha" wasn't supplied`, which for our
+/// content-hash-named submissions means this exact result already landed in
+/// an earlier attempt.
 fn put_file(
     token: &str,
     login: &str,
@@ -830,7 +916,7 @@ fn put_file(
     path: &str,
     content: &str,
     message: &str,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let encoded = base64::engine::general_purpose::STANDARD.encode(content);
     let url = format!("{API}/repos/{login}/{UPSTREAM_REPO}/contents/{path}");
     let body = json!({
@@ -839,10 +925,40 @@ fn put_file(
         "branch": branch,
     });
     let (status, body) = api("PUT", &url, token, Some(&body))?;
+    if status == 422 && body["message"].as_str().is_some_and(|m| m.contains("sha")) {
+        return Ok(false);
+    }
     if !(200..300).contains(&status) {
         return Err(api_error(status, &body));
     }
-    Ok(())
+    Ok(true)
+}
+
+/// First open upstream PR whose head is one of this user's `bench/…`
+/// branches, as `(branch, html_url)`.
+fn find_open_bench_pr(token: &str, login: &str) -> Result<Option<(String, String)>, String> {
+    let url = format!("{API}/repos/{UPSTREAM_OWNER}/{UPSTREAM_REPO}/pulls?state=open&per_page=100");
+    let (status, body) = api("GET", &url, token, None)?;
+    if !(200..300).contains(&status) {
+        return Err(api_error(status, &body));
+    }
+    Ok(open_bench_pr_in(&body, login))
+}
+
+/// Pure matcher over a GitHub pull-list response: this user's first open
+/// `bench/…` PR, if any.
+fn open_bench_pr_in(prs: &Value, login: &str) -> Option<(String, String)> {
+    let prefix = format!("{login}:bench/");
+    prs.as_array()?.iter().find_map(|pr| {
+        let label = pr["head"]["label"].as_str()?;
+        if !label.starts_with(&prefix) {
+            return None;
+        }
+        Some((
+            pr["head"]["ref"].as_str()?.to_string(),
+            pr["html_url"].as_str()?.to_string(),
+        ))
+    })
 }
 
 fn open_pr(
@@ -957,6 +1073,58 @@ mod tests {
         let payload =
             serde_json::to_value(build_submission(&[sample_result()], &cpu_only)).unwrap();
         assert_eq!(payload_slug(&payload), "cpu-test-cpu");
+    }
+
+    #[test]
+    fn open_bench_pr_matcher_picks_own_bench_branch_only() {
+        let prs = json!([
+            // Someone else's bench PR — must not match.
+            {"head": {"label": "otheruser:bench/rtx-4090-aaaa", "ref": "bench/rtx-4090-aaaa"},
+             "html_url": "https://github.com/AlexsJones/llmfit/pull/1"},
+            // Our PR but not a bench branch — must not match.
+            {"head": {"label": "me:fix/typo", "ref": "fix/typo"},
+             "html_url": "https://github.com/AlexsJones/llmfit/pull/2"},
+            // Ours — match.
+            {"head": {"label": "me:bench/rtx-4090-bbbb", "ref": "bench/rtx-4090-bbbb"},
+             "html_url": "https://github.com/AlexsJones/llmfit/pull/3"},
+        ]);
+        assert_eq!(
+            open_bench_pr_in(&prs, "me"),
+            Some((
+                "bench/rtx-4090-bbbb".to_string(),
+                "https://github.com/AlexsJones/llmfit/pull/3".to_string()
+            ))
+        );
+        assert_eq!(open_bench_pr_in(&prs, "nobody"), None);
+        assert_eq!(open_bench_pr_in(&json!([]), "me"), None);
+        assert_eq!(
+            open_bench_pr_in(&json!({"message": "rate limited"}), "me"),
+            None
+        );
+    }
+
+    #[test]
+    fn prepare_files_restamps_and_keeps_stable_names() {
+        let submission = build_submission(
+            &[sample_result()],
+            &specs_with_gpu("NVIDIA GeForce RTX 4090"),
+        );
+        let stored = StoredBenchmark {
+            path: PathBuf::from("/store/pending/1752100000-abcd1234.json"),
+            payload: serde_json::to_value(&submission).unwrap(),
+        };
+
+        let files = prepare_files(std::slice::from_ref(&stored), 9_999_999_999).unwrap();
+        assert_eq!(files.len(), 1);
+        let (slug, name, json) = &files[0];
+        assert_eq!(slug, "nvidia-geforce-rtx-4090");
+        // Upstream name mirrors the local store file, so retries are idempotent.
+        assert_eq!(name, "1752100000-abcd1234.json");
+        let payload: Value = serde_json::from_str(json).unwrap();
+        assert_eq!(payload["submittedAtUnix"], 9_999_999_999u64);
+        // Identical input at the same submit time → identical prepared file.
+        let again = prepare_files(std::slice::from_ref(&stored), 9_999_999_999).unwrap();
+        assert_eq!(&again[0].2, json);
     }
 
     #[test]

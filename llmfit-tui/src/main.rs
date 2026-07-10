@@ -2306,7 +2306,24 @@ fn store_bench_results(results: &[bench::BenchResult], overrides: &HardwareOverr
 /// Contribute everything in the local pending store as a single PR.
 fn share_pending_cli(opts: &share::ShareOptions, token: Option<String>) {
     match share::share_all_pending(opts, token) {
-        Ok(Some(url)) => println!("\n  Pull request opened: {url}"),
+        Ok(Some(outcome)) => {
+            if outcome.skipped > 0 {
+                eprintln!(
+                    "\n  {} previously submitted result(s) were skipped.",
+                    outcome.skipped
+                );
+            }
+            match (&outcome.pr_url, outcome.reused_existing_pr) {
+                (Some(url), true) => println!(
+                    "\n  Added {} submission(s) to your open pull request: {url}",
+                    outcome.uploaded
+                ),
+                (Some(url), false) => println!("\n  Pull request opened: {url}"),
+                (None, _) => println!(
+                    "\n  All stored results were already contributed upstream — nothing new to submit."
+                ),
+            }
+        }
         Ok(None) => {}
         Err(e) => {
             eprintln!("  Share failed: {e}");

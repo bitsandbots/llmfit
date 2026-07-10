@@ -532,12 +532,28 @@ fn bench_offer_worker(
         stored.len()
     )));
     match share::submit_stored(&stored, &token) {
-        Ok(pr_url) => {
+        Ok(outcome) => {
             share::mark_shared(&stored);
+            let mut notes: Vec<String> = Vec::new();
+            if outcome.reused_existing_pr {
+                notes.push(format!(
+                    "Added {} result(s) to your open benchmark PR.",
+                    outcome.uploaded
+                ));
+            }
+            if outcome.skipped > 0 {
+                notes.push(format!(
+                    "{} previously submitted result(s) skipped.",
+                    outcome.skipped
+                ));
+            }
+            if outcome.pr_url.is_none() {
+                notes.push("All results were already contributed upstream.".to_string());
+            }
             let _ = tx.send(BenchOfferMsg::Done {
                 summary,
-                pr_url: Some(pr_url),
-                share_note: None,
+                pr_url: outcome.pr_url,
+                share_note: (!notes.is_empty()).then(|| notes.join(" ")),
             });
         }
         Err(e) => {
