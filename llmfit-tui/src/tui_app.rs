@@ -87,11 +87,13 @@ pub enum ProviderDetectionMsg {
     },
     DockerMr {
         available: bool,
+        app_installed: bool,
         installed: HashSet<String>,
         installed_count: usize,
     },
     LmStudio {
         available: bool,
+        app_installed: bool,
         installed: HashSet<String>,
         installed_count: usize,
     },
@@ -905,8 +907,10 @@ pub struct App {
     pub llamacpp_detection_hint: String,
     llamacpp: LlamaCppProvider,
     pub docker_mr_available: bool,
+    pub docker_desktop_installed: bool,
     docker_mr: DockerModelRunnerProvider,
     pub lmstudio_available: bool,
+    pub lmstudio_app_installed: bool,
     lmstudio: LmStudioProvider,
     pub vllm_available: bool,
     vllm: VllmProvider,
@@ -1102,8 +1106,10 @@ impl App {
         let mlx_available = false;
         let docker_mr = DockerModelRunnerProvider::new();
         let docker_mr_available = false;
+        let docker_desktop_installed = false;
         let lmstudio = LmStudioProvider::new();
         let lmstudio_available = false;
+        let lmstudio_app_installed = false;
         let vllm = VllmProvider::new();
         let vllm_available = false;
         let ramalama = RamaLamaProvider::new();
@@ -1145,8 +1151,12 @@ impl App {
             thread::spawn(move || {
                 let docker_mr = DockerModelRunnerProvider::new();
                 let (available, installed, installed_count) = docker_mr.detect_with_installed();
+                // Distinguish "not installed" from "installed but Docker
+                // Desktop isn't running" (#731).
+                let app_installed = available || llmfit_core::providers::docker_desktop_installed();
                 let _ = tx.send(ProviderDetectionMsg::DockerMr {
                     available,
+                    app_installed,
                     installed,
                     installed_count,
                 });
@@ -1157,8 +1167,12 @@ impl App {
             thread::spawn(move || {
                 let lmstudio = LmStudioProvider::new();
                 let (available, installed, installed_count) = lmstudio.detect_with_installed();
+                // Distinguish "not installed" from "installed but the local
+                // server isn't running" (#731).
+                let app_installed = available || llmfit_core::providers::lmstudio_app_installed();
                 let _ = tx.send(ProviderDetectionMsg::LmStudio {
                     available,
+                    app_installed,
                     installed,
                     installed_count,
                 });
@@ -1438,8 +1452,10 @@ impl App {
             llamacpp_detection_hint,
             llamacpp,
             docker_mr_available,
+            docker_desktop_installed,
             docker_mr,
             lmstudio_available,
+            lmstudio_app_installed,
             lmstudio,
             vllm_available,
             vllm,
@@ -4557,19 +4573,23 @@ impl App {
                         }
                         ProviderDetectionMsg::DockerMr {
                             available,
+                            app_installed,
                             installed,
                             installed_count,
                         } => {
                             self.docker_mr_available = available;
+                            self.docker_desktop_installed = app_installed;
                             self.installed.docker_mr = installed;
                             self.installed.docker_mr_count = installed_count;
                         }
                         ProviderDetectionMsg::LmStudio {
                             available,
+                            app_installed,
                             installed,
                             installed_count,
                         } => {
                             self.lmstudio_available = available;
+                            self.lmstudio_app_installed = app_installed;
                             self.installed.lmstudio = installed;
                             self.installed.lmstudio_count = installed_count;
                         }

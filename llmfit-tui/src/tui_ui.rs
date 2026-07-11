@@ -137,11 +137,15 @@ fn draw_system_bar(frame: &mut Frame, app: &App, area: Rect, tc: &ThemeColors) {
 
     let ollama_info = if app.ollama_available {
         format!("Ollama: ✓ ({} installed)", app.installed.ollama_count)
+    } else if app.ollama_binary_available {
+        "Ollama: installed (not running)".to_string()
     } else {
         "Ollama: ✗".to_string()
     };
     let ollama_color = if app.ollama_available {
         tc.good
+    } else if app.ollama_binary_available {
+        tc.warning
     } else {
         tc.muted
     };
@@ -182,22 +186,30 @@ fn draw_system_bar(frame: &mut Frame, app: &App, area: Rect, tc: &ThemeColors) {
 
     let docker_mr_info = if app.docker_mr_available {
         format!("Docker: ✓ ({} models)", app.installed.docker_mr_count)
+    } else if app.docker_desktop_installed {
+        "Docker: installed (not running)".to_string()
     } else {
         "Docker: ✗".to_string()
     };
     let docker_mr_color = if app.docker_mr_available {
         tc.good
+    } else if app.docker_desktop_installed {
+        tc.warning
     } else {
         tc.muted
     };
 
     let lmstudio_info = if app.lmstudio_available {
         format!("LM Studio: ✓ ({} models)", app.installed.lmstudio_count)
+    } else if app.lmstudio_app_installed {
+        "LM Studio: installed (server off)".to_string()
     } else {
         "LM Studio: ✗".to_string()
     };
     let lmstudio_color = if app.lmstudio_available {
         tc.good
+    } else if app.lmstudio_app_installed {
+        tc.warning
     } else {
         tc.muted
     };

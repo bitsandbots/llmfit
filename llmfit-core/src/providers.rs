@@ -3,7 +3,7 @@
 //! Each provider can list locally installed models and pull new ones.
 
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 // ---------------------------------------------------------------------------
 // Provider trait
@@ -1629,6 +1629,49 @@ fn is_docker_desktop_running() -> bool {
         .unwrap_or(false)
 }
 
+/// Check whether the Docker Desktop application is installed, regardless of
+/// whether it is currently running (#731). The Model Runner API probe only
+/// succeeds while Docker Desktop is up, so this is what lets the UI say
+/// "installed (not running)" instead of "not detected".
+pub fn docker_desktop_installed() -> bool {
+    docker_desktop_install_candidates(
+        std::env::var("ProgramFiles").ok().as_deref(),
+        dirs::home_dir().as_deref(),
+    )
+    .iter()
+    .any(|p| p.exists())
+}
+
+/// Filesystem locations that identify a Docker Desktop (or docker-model
+/// plugin) install. Pure so tests can cover the per-OS layouts; `exists()`
+/// checks happen in [`docker_desktop_installed`].
+fn docker_desktop_install_candidates(
+    program_files: Option<&str>,
+    home: Option<&Path>,
+) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(pf) = program_files {
+        let docker = Path::new(pf).join("Docker").join("Docker");
+        // Classic layout, and the frontend/ layout used by newer releases
+        // (e.g. C:\Program Files\Docker\Docker\frontend\Docker Desktop.exe).
+        candidates.push(docker.join("Docker Desktop.exe"));
+        candidates.push(docker.join("frontend").join("Docker Desktop.exe"));
+        candidates.push(Path::new(pf).join("Docker").join("cli-plugins"));
+    }
+    candidates.push(PathBuf::from("/Applications/Docker.app"));
+    candidates.push(PathBuf::from("/opt/docker-desktop"));
+    if let Some(home) = home {
+        candidates.push(home.join("Applications").join("Docker.app"));
+        candidates.push(home.join(".docker").join("desktop"));
+        // Standalone Model Runner plugin (docker-model), installable
+        // without Docker Desktop on Docker CE.
+        let plugins = home.join(".docker").join("cli-plugins");
+        candidates.push(plugins.join("docker-model"));
+        candidates.push(plugins.join("docker-model.exe"));
+    }
+    candidates
+}
+
 fn normalize_docker_mr_host(raw: &str) -> Option<String> {
     let host = raw.trim();
     if host.is_empty() {
@@ -1807,6 +1850,54 @@ impl ModelProvider for DockerModelRunnerProvider {
 pub struct LmStudioProvider {
     base_url: String,
     api_key: Option<String>,
+}
+
+/// Check whether the LM Studio application is installed, regardless of
+/// whether its local server is running (#731). LM Studio's REST API is off
+/// until the user starts the server (or `lms server start`), so the HTTP
+/// probe alone reports installed-but-idle copies as missing.
+pub fn lmstudio_app_installed() -> bool {
+    if command_exists("lms") {
+        return true;
+    }
+    lmstudio_install_candidates(
+        std::env::var("ProgramFiles").ok().as_deref(),
+        std::env::var("LOCALAPPDATA").ok().as_deref(),
+        dirs::home_dir().as_deref(),
+    )
+    .iter()
+    .any(|p| p.exists())
+}
+
+/// Filesystem locations that identify an LM Studio install. Pure so tests
+/// can cover the per-OS layouts; `exists()` checks happen in
+/// [`lmstudio_app_installed`].
+fn lmstudio_install_candidates(
+    program_files: Option<&str>,
+    local_app_data: Option<&str>,
+    home: Option<&Path>,
+) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    // Windows per-machine install (e.g. C:\Program Files\LM Studio\LM Studio.exe).
+    if let Some(pf) = program_files {
+        candidates.push(Path::new(pf).join("LM Studio").join("LM Studio.exe"));
+    }
+    // Windows per-user install (the installer default).
+    if let Some(lad) = local_app_data {
+        candidates.push(
+            Path::new(lad)
+                .join("Programs")
+                .join("LM Studio")
+                .join("LM Studio.exe"),
+        );
+    }
+    candidates.push(PathBuf::from("/Applications/LM Studio.app"));
+    if let Some(home) = home {
+        candidates.push(home.join("Applications").join("LM Studio.app"));
+        // ~/.lmstudio is created on first run on every OS (models, lms CLI).
+        candidates.push(home.join(".lmstudio"));
+    }
+    candidates
 }
 
 fn normalize_lmstudio_host(raw: &str) -> Option<String> {
@@ -3613,6 +3704,70 @@ pub fn tag_matches_model(tag: &str, hf_name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Install layouts from issue #731 (Windows, LM Studio + Docker Desktop
+    // installed but their servers not running) must be recognized. Expected
+    // paths are built with join() so separators stay portable across the
+    // 3-OS CI matrix.
+    #[test]
+    fn test_lmstudio_install_candidates_windows_layouts() {
+        let pf = Path::new(r"C:\Program Files");
+        let lad = Path::new(r"C:\Users\ben\AppData\Local");
+        let home = Path::new(r"C:\Users\ben");
+        let candidates = lmstudio_install_candidates(pf.to_str(), lad.to_str(), Some(home));
+        // Reporter's per-machine install.
+        assert!(candidates.contains(&pf.join("LM Studio").join("LM Studio.exe")));
+        // Installer's per-user default.
+        assert!(candidates.contains(&lad.join("Programs").join("LM Studio").join("LM Studio.exe")));
+        // First-run data dir (any OS).
+        assert!(candidates.contains(&home.join(".lmstudio")));
+    }
+
+    #[test]
+    fn test_lmstudio_install_candidates_unix_layouts() {
+        let home = Path::new("/home/ben");
+        let candidates = lmstudio_install_candidates(None, None, Some(home));
+        assert!(candidates.contains(&PathBuf::from("/Applications/LM Studio.app")));
+        assert!(candidates.contains(&home.join("Applications").join("LM Studio.app")));
+        assert!(candidates.contains(&home.join(".lmstudio")));
+    }
+
+    #[test]
+    fn test_docker_desktop_install_candidates_windows_layouts() {
+        let pf = Path::new(r"C:\Program Files");
+        let home = Path::new(r"C:\Users\ben");
+        let candidates = docker_desktop_install_candidates(pf.to_str(), Some(home));
+        let docker = pf.join("Docker").join("Docker");
+        // Classic exe location.
+        assert!(candidates.contains(&docker.join("Docker Desktop.exe")));
+        // Reporter's frontend\ layout from newer Docker Desktop releases.
+        assert!(candidates.contains(&docker.join("frontend").join("Docker Desktop.exe")));
+        assert!(
+            candidates.contains(
+                &home
+                    .join(".docker")
+                    .join("cli-plugins")
+                    .join("docker-model.exe")
+            )
+        );
+    }
+
+    #[test]
+    fn test_docker_desktop_install_candidates_unix_layouts() {
+        let home = Path::new("/home/ben");
+        let candidates = docker_desktop_install_candidates(None, Some(home));
+        assert!(candidates.contains(&PathBuf::from("/Applications/Docker.app")));
+        assert!(candidates.contains(&PathBuf::from("/opt/docker-desktop")));
+        assert!(candidates.contains(&home.join(".docker").join("desktop")));
+        assert!(
+            candidates.contains(
+                &home
+                    .join(".docker")
+                    .join("cli-plugins")
+                    .join("docker-model")
+            )
+        );
+    }
 
     #[test]
     fn test_hf_name_to_mlx_candidates() {
