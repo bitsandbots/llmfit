@@ -194,6 +194,28 @@ fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
+/// Whether a hardware-identity string is a placeholder emitted when detection
+/// failed (e.g. a GPU reported as "N/A" because ROCm/libdrm couldn't name it).
+fn is_placeholder_identity(s: &str) -> bool {
+    let t = s.trim().to_lowercase();
+    t.is_empty() || matches!(t.as_str(), "n/a" | "na" | "n-a" | "unknown" | "none" | "null" | "-")
+}
+
+/// Whether a stored submission identifies its hardware well enough to be a
+/// useful community contribution. The leaderboard buckets results by hardware
+/// identity — GPU/accelerator name for GPU machines, CPU for CPU-only ones — so
+/// a placeholder identity produces a meaningless bucket and must not be shared.
+fn hardware_is_identifiable(payload: &Value) -> bool {
+    let hw = &payload["hardware"];
+    match hw["hwClass"].as_str().unwrap_or("") {
+        "DISCRETE_GPU" | "UNIFIED" => {
+            !is_placeholder_identity(hw["hardwareName"].as_str().unwrap_or(""))
+        }
+        // CPU-only machines are identified by their CPU (see `payload_slug`).
+        _ => !is_placeholder_identity(hw["cpu"].as_str().unwrap_or("")),
+    }
+}
+
 /// Slug identifying the hardware of a stored submission payload, used for the
 /// branch name and submission path.
 fn payload_slug(payload: &Value) -> String {
@@ -238,6 +260,7 @@ fn short_hash(s: &str) -> String {
 // ---------------------------------------------------------------------------
 
 /// A submission payload recorded in the local benchmark store.
+#[derive(Clone)]
 pub struct StoredBenchmark {
     pub path: PathBuf,
     pub payload: Value,
@@ -494,6 +517,26 @@ pub fn submit_stored(stored: &[StoredBenchmark], token: &str) -> Result<SubmitOu
     if stored.is_empty() {
         return Err("no benchmark results to share".to_string());
     }
+
+    // Never contribute a result whose hardware could not be identified: the
+    // community leaderboard groups submissions by hardware, so a placeholder
+    // identity (e.g. a GPU reported as "N/A" when ROCm/libdrm can't name it) is
+    // noise. Keep such results local rather than polluting the board.
+    let stored: Vec<StoredBenchmark> = stored
+        .iter()
+        .filter(|s| hardware_is_identifiable(&s.payload))
+        .cloned()
+        .collect();
+    if stored.is_empty() {
+        return Err(
+            "not submitting: your hardware could not be identified (GPU/accelerator \
+             name reported as \"N/A\"). The community leaderboard groups results by \
+             hardware, so an unidentified machine can't be contributed. Your results \
+             remain stored locally."
+                .to_string(),
+        );
+    }
+    let stored = stored.as_slice();
 
     let now = now_unix();
     let files = prepare_files(stored, now)?;
@@ -1083,6 +1126,32 @@ mod tests {
         assert_eq!(nearest_mem_tier(23.9), 24);
         assert_eq!(nearest_mem_tier(31.0), 32);
         assert_eq!(nearest_mem_tier(7.5), 8);
+    }
+
+    #[test]
+    fn hardware_identifiable_rejects_placeholder_gpu() {
+        // The exact shape that produced the meaningless `bench/n-a-…` PR: a GPU
+        // machine whose accelerator name could not be read.
+        let na = json!({
+            "hardware": { "hwClass": "DISCRETE_GPU", "hardwareName": "N/A", "cpu": "AMD Ryzen" }
+        });
+        assert!(!hardware_is_identifiable(&na));
+
+        // A real GPU name is fine.
+        let good = json!({
+            "hardware": { "hwClass": "UNIFIED", "hardwareName": "Apple M3 Max", "cpu": "Apple M3 Max" }
+        });
+        assert!(hardware_is_identifiable(&good));
+
+        // CPU-only machines are identified by their CPU.
+        let cpu_only = json!({
+            "hardware": { "hwClass": "CPU_ONLY", "hardwareName": null, "cpu": "Intel Core i9-14900K" }
+        });
+        assert!(hardware_is_identifiable(&cpu_only));
+        let cpu_unknown = json!({
+            "hardware": { "hwClass": "CPU_ONLY", "hardwareName": null, "cpu": "unknown" }
+        });
+        assert!(!hardware_is_identifiable(&cpu_unknown));
     }
 
     fn specs_with_gpu(name: &str) -> SystemSpecs {
