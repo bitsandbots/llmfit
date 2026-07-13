@@ -188,6 +188,13 @@ impl SystemSpecs {
             if let Some(idx) = amd_idx {
                 gpus[idx].unified_memory = true;
                 gpus[idx].vram_gb = Some(apu_pool_gb);
+                // When detection could only produce a generic name (e.g. rocm-smi
+                // reported "N/A"), use the APU model instead — it names the iGPU
+                // (e.g. "AMD Ryzen AI MAX+ 395 w/ Radeon 8060S"), giving a stable
+                // hardware identity for the leaderboard.
+                if is_generic_amd_gpu_name(&gpus[idx].name) {
+                    gpus[idx].name = format!("{cpu_name} (integrated)");
+                }
             } else {
                 // No AMD GPU found via other methods; create one.
                 gpus.push(GpuInfo {
@@ -674,10 +681,18 @@ impl SystemSpecs {
             let lower = line.to_lowercase();
             if lower.contains("card series")
                 && line.contains(':')
-                && let Some(name) = line.rsplit(':').next().map(|n| n.trim().to_string())
-                && !name.is_empty()
+                && let Some(raw) = line.rsplit(':').next().map(|n| n.trim().to_string())
+                && !raw.is_empty()
             {
-                block.push(name);
+                // rocm-smi reports "N/A" when it cannot read the marketing name
+                // (e.g. libdrm_amdgpu.so missing on Strix Halo APUs). Keep the
+                // slot aligned but record it as a generic AMD GPU so callers can
+                // fall back to a real name (lspci / the APU model) downstream.
+                block.push(if is_placeholder_gpu_name(&raw) {
+                    "AMD GPU".to_string()
+                } else {
+                    raw
+                });
             } else if lower.contains("gfx version")
                 && line.contains(':')
                 && let Some(gfx) = line.rsplit(':').next().map(|g| g.trim().to_string())
@@ -735,7 +750,7 @@ impl SystemSpecs {
             }
             let slice_end = end.min(line.len());
             let name = line[start..slice_end].trim().to_string();
-            out.push(if name.is_empty() {
+            out.push(if name.is_empty() || is_placeholder_gpu_name(&name) {
                 "AMD GPU".to_string()
             } else {
                 name
@@ -2177,6 +2192,27 @@ fn detect_running_in_wsl() -> bool {
 ///  - Ryzen AI 9 / 7 / 5 (Strix Point, Krackan Point): configurable shared
 ///    memory, users can allocate most of system RAM to GPU via BIOS.
 /// All Ryzen AI APUs have integrated Radeon GPUs that share system memory.
+/// Placeholder GPU-name tokens that mean detection failed to read a real
+/// marketing name (rocm-smi prints "N/A" when it can't load libdrm). These
+/// must never be used as an actual GPU identity.
+fn is_placeholder_gpu_name(name: &str) -> bool {
+    let lower = name.trim().to_lowercase();
+    matches!(
+        lower.as_str(),
+        "" | "n/a" | "na" | "n-a" | "n\\a" | "unknown" | "none" | "null" | "-"
+    )
+}
+
+/// Whether a GPU name is too generic to identify the specific model, so a more
+/// descriptive fallback (e.g. the APU model string) should be preferred.
+fn is_generic_amd_gpu_name(name: &str) -> bool {
+    let lower = name.trim().to_lowercase();
+    matches!(
+        lower.as_str(),
+        "amd gpu" | "radeon graphics" | "amd radeon graphics"
+    )
+}
+
 fn is_amd_unified_memory_apu(cpu_name: &str) -> bool {
     let lower = cpu_name.to_lowercase();
     // Only "Ryzen AI MAX" / "Ryzen AI MAX+" APUs have a large unified memory
@@ -4061,6 +4097,39 @@ GPU[0]          : VRAM Total Used Memory (B): 200000";
         assert_eq!(gpus.len(), 1);
         assert_eq!(gpus[0].name, "AMD GPU");
         assert!(gpus[0].vram_gb.unwrap() > 31.0);
+    }
+
+    // Strix Halo (AMD Ryzen AI MAX+) with libdrm_amdgpu.so missing: rocm-smi
+    // reports `Card Series: N/A` for the marketing name. That "N/A" must not
+    // become the GPU identity — it falls back to a generic "AMD GPU" so the
+    // APU-unify step (and, ultimately, the leaderboard) can name it properly.
+    #[test]
+    fn test_parse_rocm_smi_na_product_name_falls_back() {
+        let vram_text = "\
+GPU[0]          : VRAM Total Memory (B): 68719476736
+GPU[0]          : VRAM Total Used Memory (B): 53637746688";
+        let product_text = "\
+GPU[0]          : Card Series:            N/A
+GPU[0]          : Card Model:             0x1586
+GPU[0]          : Card SKU:               STRXLGEN
+GPU[0]          : GFX Version:            gfx1151";
+
+        let gpus = SystemSpecs::parse_rocm_smi_output(vram_text, Some(product_text));
+
+        assert_eq!(gpus.len(), 1);
+        assert_eq!(gpus[0].name, "AMD GPU", "N/A must not be used as a name");
+        assert!(gpus[0].vram_gb.unwrap() > 63.0);
+    }
+
+    #[test]
+    fn test_is_placeholder_and_generic_amd_gpu_name() {
+        assert!(super::is_placeholder_gpu_name("N/A"));
+        assert!(super::is_placeholder_gpu_name(" n/a "));
+        assert!(super::is_placeholder_gpu_name("unknown"));
+        assert!(!super::is_placeholder_gpu_name("Radeon 8060S"));
+        assert!(super::is_generic_amd_gpu_name("AMD GPU"));
+        assert!(super::is_generic_amd_gpu_name("Radeon Graphics"));
+        assert!(!super::is_generic_amd_gpu_name("AMD Radeon RX 7900 XTX"));
     }
 
     // Newer rocm-smi emits a tabular layout instead of one line per field.
