@@ -51,6 +51,12 @@ pub struct SystemSpecs {
     /// For multi-GPU inference backends (llama.cpp, vLLM), models can be split
     /// across cards, so we use total VRAM for fit scoring.
     pub total_gpu_vram_gb: Option<f64>,
+    /// On Apple Silicon (unified memory), how much of the shared pool the GPU
+    /// may actually wire — from Metal's `recommendedMaxWorkingSetSize`. macOS
+    /// caps this well below total RAM. `None` on other platforms or when the
+    /// query is unavailable. Distinct from `gpu_vram_gb`, which for unified
+    /// memory reports the *total* pool.
+    pub gpu_available_gb: Option<f64>,
     pub gpu_name: Option<String>,
     pub gpu_count: u32,
     pub unified_memory: bool,
@@ -114,6 +120,16 @@ impl SystemSpecs {
             };
         let backend = primary.map(|g| g.backend).unwrap_or(cpu_backend);
 
+        // Only Apple Silicon reports unified memory *and* runs Metal, so the
+        // GPU-available query is meaningful only there. Other unified-memory
+        // paths (AMD APUs, NVIDIA Grace) fall through to `None` because the
+        // query is macOS-only.
+        let gpu_available_gb = if unified_memory {
+            detect_gpu_available_gb()
+        } else {
+            None
+        };
+
         SystemSpecs {
             total_ram_gb,
             available_ram_gb,
@@ -122,6 +138,7 @@ impl SystemSpecs {
             has_gpu,
             gpu_vram_gb,
             total_gpu_vram_gb,
+            gpu_available_gb,
             gpu_name,
             gpu_count,
             unified_memory,
@@ -2084,11 +2101,14 @@ impl SystemSpecs {
                 };
                 if gpu.unified_memory {
                     println!(
-                        "{}{} (unified memory, {:.2} GB shared, {})",
+                        "{}{}",
                         prefix,
-                        gpu.name,
-                        gpu.vram_gb.unwrap_or(0.0),
-                        gpu.backend.label(),
+                        format_unified_memory_line(
+                            &gpu.name,
+                            gpu.vram_gb.unwrap_or(0.0),
+                            self.gpu_available_gb,
+                            gpu.backend.label(),
+                        )
                     );
                 } else {
                     match gpu.vram_gb {
@@ -2132,6 +2152,59 @@ impl SystemSpecs {
         }
         println!();
     }
+}
+
+/// Format the unified-memory GPU line. When the GPU-available figure is known
+/// (Apple Silicon), it is shown alongside the total shared pool; otherwise the
+/// line falls back to reporting the shared pool alone.
+pub(crate) fn format_unified_memory_line(
+    name: &str,
+    shared_gb: f64,
+    gpu_available_gb: Option<f64>,
+    backend_label: &str,
+) -> String {
+    match gpu_available_gb {
+        Some(available) => format!(
+            "{name} (unified memory, {available:.2} GB GPU-available of {shared_gb:.2} GB shared, {backend_label})"
+        ),
+        None => format!("{name} (unified memory, {shared_gb:.2} GB shared, {backend_label})"),
+    }
+}
+
+/// Query how much unified memory the GPU may wire on Apple Silicon.
+///
+/// Metal's `recommendedMaxWorkingSetSize` gives the OS-default cap. A user can
+/// override that cap with `sysctl iogpu.wired_limit_mb`; when a non-zero
+/// override is set it is authoritative (Metal's recommendation may not reflect
+/// a manually *raised* limit), so it wins. Returns `None` when no default Metal
+/// device is available. Reported in base-2 GB to match the rest of the display.
+#[cfg(target_os = "macos")]
+pub(crate) fn detect_gpu_available_gb() -> Option<f64> {
+    use objc2_metal::{MTLCreateSystemDefaultDevice, MTLDevice};
+    let device = MTLCreateSystemDefaultDevice()?;
+    let metal_gb = device.recommendedMaxWorkingSetSize() as f64 / (1024.0 * 1024.0 * 1024.0);
+    Some(sysctl_wired_limit_gb().unwrap_or(metal_gb))
+}
+
+/// Read `iogpu.wired_limit_mb`. `Some(gb)` only when a non-zero override is set;
+/// `0` (the default, meaning "no override") and any read failure map to `None`.
+#[cfg(target_os = "macos")]
+fn sysctl_wired_limit_gb() -> Option<f64> {
+    let output = std::process::Command::new("sysctl")
+        .args(["-n", "iogpu.wired_limit_mb"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let mib: f64 = String::from_utf8(output.stdout).ok()?.trim().parse().ok()?;
+    (mib > 0.0).then_some(mib / 1024.0)
+}
+
+/// Non-macOS platforms have no Metal working-set concept.
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn detect_gpu_available_gb() -> Option<f64> {
+    None
 }
 
 /// Parse a human-readable memory size string into gigabytes.
@@ -3454,6 +3527,7 @@ GPU id = 1 (NVIDIA GeForce RTX 4090)
             has_gpu: false,
             gpu_vram_gb: None,
             total_gpu_vram_gb: None,
+            gpu_available_gb: None,
             gpu_name: None,
             gpu_count: 0,
             unified_memory: false,
@@ -3473,6 +3547,7 @@ GPU id = 1 (NVIDIA GeForce RTX 4090)
             has_gpu: true,
             gpu_vram_gb: Some(8.0),
             total_gpu_vram_gb: Some(8.0),
+            gpu_available_gb: None,
             gpu_name: Some("NVIDIA RTX 3070".to_string()),
             gpu_count: 1,
             unified_memory: false,
@@ -3516,6 +3591,23 @@ GPU id = 1 (NVIDIA GeForce RTX 4090)
         let specs = specs.with_gpu_memory_override(24.0);
         assert_eq!(specs.gpu_vram_gb, Some(24.0));
         assert_eq!(specs.total_gpu_vram_gb, Some(48.0));
+    }
+
+    // ── format_unified_memory_line ───────────────────────────────────
+
+    #[test]
+    fn test_unified_line_shows_gpu_available_when_known() {
+        let line = super::format_unified_memory_line("Apple M3", 16.0, Some(11.84), "Metal");
+        assert_eq!(
+            line,
+            "Apple M3 (unified memory, 11.84 GB GPU-available of 16.00 GB shared, Metal)"
+        );
+    }
+
+    #[test]
+    fn test_unified_line_falls_back_when_unknown() {
+        let line = super::format_unified_memory_line("Apple M3", 16.0, None, "Metal");
+        assert_eq!(line, "Apple M3 (unified memory, 16.00 GB shared, Metal)");
     }
 
     // ── is_amd_unified_memory_apu ────────────────────────────────────
@@ -3926,6 +4018,7 @@ GPU id = 1 (NVIDIA GeForce RTX 4090)
             has_gpu: true,
             gpu_vram_gb: Some(16.0),
             total_gpu_vram_gb: Some(16.0),
+            gpu_available_gb: None,
             gpu_name: Some("Test GPU".to_string()),
             gpu_count: 1,
             unified_memory: false,
@@ -3959,6 +4052,7 @@ GPU id = 1 (NVIDIA GeForce RTX 4090)
             has_gpu: true,
             gpu_vram_gb: Some(36.0),
             total_gpu_vram_gb: Some(36.0),
+            gpu_available_gb: None,
             gpu_name: Some("Apple M2 Max".to_string()),
             gpu_count: 1,
             unified_memory: true,
@@ -3991,6 +4085,7 @@ GPU id = 1 (NVIDIA GeForce RTX 4090)
             has_gpu: false,
             gpu_vram_gb: None,
             total_gpu_vram_gb: None,
+            gpu_available_gb: None,
             gpu_name: None,
             gpu_count: 0,
             unified_memory: false,
