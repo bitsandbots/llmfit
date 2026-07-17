@@ -130,7 +130,7 @@ Envelope shape:
       "parameter_count": "7B",
       "params_b": 7.0,
       "context_length": 32768,
-      "usable_context": 24576,
+      "usable_context": 32768,
       "effective_context_length": 8192,
       "use_case": "Coding",
       "category": "Coding",
